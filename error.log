@@ -1,0 +1,50 @@
+../fs/kernfs/file.c:281:16: warning: stack frame size (4176) exceeds limit (2048) in 'kernfs_fop_write' [-Wframe-larger-than]
+  281 | static ssize_t kernfs_fop_write(struct file *file, const char __user *user_buf,
+      |                ^
+1 warning generated.
+../techpack/display/msm/sde/sde_crtc.c:2695:20: warning: unused variable 'panel' [-Wunused-variable]
+ 2695 |         struct dsi_panel *panel = dsi_display->panel;
+      |                           ^~~~~
+../techpack/display/msm/sde/sde_crtc.c:5088:12: warning: stack frame size (3296) exceeds limit (2048) in 'sde_crtc_atomic_check' [-Wframe-larger-than]
+ 5088 | static int sde_crtc_atomic_check(struct drm_crtc *crtc,
+      |            ^
+2 warnings generated.
+../fs/d_path.c:429:1: warning: stack frame size (4224) exceeds limit (2048) in '__arm64_sys_getcwd' [-Wframe-larger-than]
+  429 | SYSCALL_DEFINE2(getcwd, char __user *, buf, unsigned long, size)
+      | ^
+../include/linux/syscalls.h:216:36: note: expanded from macro 'SYSCALL_DEFINE2'
+  216 | #define SYSCALL_DEFINE2(name, ...) SYSCALL_DEFINEx(2, _##name, __VA_ARGS__)
+      |                                    ^
+../include/linux/syscalls.h:226:2: note: expanded from macro 'SYSCALL_DEFINEx'
+  226 |         __SYSCALL_DEFINEx(x, sname, __VA_ARGS__)
+      |         ^
+../arch/arm64/include/asm/syscall_wrapper.h:56:18: note: expanded from macro '__SYSCALL_DEFINEx'
+   56 |         asmlinkage long __arm64_sys##name(const struct pt_regs *regs)           \
+      |                         ^
+<scratch space>:100:1: note: expanded from here
+  100 | __arm64_sys_getcwd
+      | ^
+1 warning generated.
+../techpack/display/msm/dsi/dsi_display.c:5696:28: warning: variable 'connector' is uninitialized when used here [-Wuninitialized]
+ 5696 |         dsi_display_set_backlight(connector, display, panel->bl_config.bl_level);
+      |                                   ^~~~~~~~~
+../techpack/display/msm/dsi/dsi_display.c:5681:33: note: initialize the variable 'connector' to silence this warning
+ 5681 |         struct drm_connector *connector;
+      |                                        ^
+      |                                         = NULL
+../techpack/display/msm/dsi/dsi_display.c:5725:17: warning: unused variable 'dev' [-Wunused-variable]
+ 5725 |         struct device *dev = &display->pdev->dev;
+      |                        ^~~
+2 warnings generated.
+../drivers/power/supply/battery_secrete/sha384_software.c:61:5: warning: stack frame size (2912) exceeds limit (2048) in 'sha3_256_hmac' [-Wframe-larger-than]
+   61 | int sha3_256_hmac(unsigned char *key, int key_len, unsigned char *message, int msg_len, unsigned char *mac)
+      |     ^
+1 warning generated.
+../drivers/power/supply/pd_policy_manager.c:899:10: warning: mixing declarations and code is a C99 extension [-Wdeclaration-after-statement]
+  899 |     bool thermal_boost = thermal_boost_allowed();
+      |          ^
+1 warning generated.
+../drivers/w1/slaves/w1_slg.c:150:12: warning: stack frame size (2192) exceeds limit (2048) in 'bus_send_recv' [-Wframe-larger-than]
+  150 | static int bus_send_recv(unsigned char *input, int input_len, unsigned char *output, int *output_len)
+      |            ^
+1 warning generated.
