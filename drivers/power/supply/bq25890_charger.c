@@ -1021,6 +1021,14 @@ static void bq25890_handle_state_change(struct bq25890_device *bq,
 	if (!new_state->online) {			     /* power removed */
 		/* disable ADC */
 		pr_err("--->southchip, adapter remove\n");
+		if (bq->pdactive) {
+			dev_info(bq->dev,
+				 "VBUS detached, clearing stale PD active state\n");
+			bq->pdactive = 0;
+		}
+
+		/* Always return D+/D- to the AP before touching the charger. */
+		request_dpdm(bq, 0);
 		ret = bq25890_field_write(bq, F_CONV_RATE, 0);
 		if (ret < 0)
 			goto error;
@@ -1028,7 +1036,6 @@ static void bq25890_handle_state_change(struct bq25890_device *bq,
 			cancel_delayed_work_sync(&bq->detect_vbat_set_vindpm_work);
                 }
 		cancel_delayed_work_sync(&bq->detect_float_work);
-		request_dpdm(bq,0); // sily open ap dp dm
 	} else if (!old_state.online) {			    /* power inserted */
 		pr_err("--->southchip, adapter insert\n");
 		bq->detect_force_dpdm_count = 0;
@@ -1053,19 +1060,47 @@ static void bq25890_handle_state_change(struct bq25890_device *bq,
 	}
 
 
-	if (old_state.vbus_status == 0 && new_state->vbus_status != 0) {
-		pr_err("southchip bc1.2 done, open ap dpdm\n");
+	if (old_state.vbus_status == BQ2589X_VBUS_NONE &&
+	    new_state->vbus_status != BQ2589X_VBUS_NONE) {
+		pr_err("southchip bc1.2 done %u->%u, open ap dpdm\n",
+		       old_state.vbus_status, new_state->vbus_status);
+
 		if (bq->chip_id == SC8989X_ID) {
 			pr_info("set Vindpm to 4800mV\n");
 			bq25890_field_write(bq, F_FORCE_VINDPM, 1);
-			bq25890_field_write(bq, F_VINDPM, 0x16);//Vindpm 4.8V
-		
-			schedule_delayed_work(&bq->detect_vbat_set_vindpm_work, msecs_to_jiffies(2000));
-                }
-		if (new_state->vbus_status == 5 && bq->detect_force_dpdm_count < 1) {		// float
-			schedule_delayed_work(&bq->detect_float_work, msecs_to_jiffies(1000));
+			bq25890_field_write(bq, F_VINDPM, 0x16);
+
+			schedule_delayed_work(
+				&bq->detect_vbat_set_vindpm_work,
+				msecs_to_jiffies(2000));
 		}
-		request_dpdm(bq,0); //open ap dp dm
+
+		if (new_state->vbus_status == BQ2589X_VBUS_UNKNOWN &&
+		    bq->detect_force_dpdm_count < 1)
+			schedule_delayed_work(&bq->detect_float_work,
+					      msecs_to_jiffies(1000));
+
+		request_dpdm(bq, 0);
+	}
+
+	if (old_state.online && new_state->online &&
+	    old_state.vbus_status != new_state->vbus_status &&
+	    (new_state->vbus_status == BQ2589X_VBUS_USB_SDP ||
+	     new_state->vbus_status == BQ2589X_VBUS_USB_CDP)) {
+		/*
+		 * VBUS may stay continuously high while the cable/source changes
+		 * from a charger to a PC. In that case we never observe
+		 * VBUS_NONE, but D+/D- still need to be returned to the USB PHY.
+		 */
+		if (bq->pdactive) {
+			dev_info(bq->dev,
+				 "USB data port detected, clearing stale PD state\n");
+			bq->pdactive = 0;
+		}
+
+		pr_info("USB data port detected (vbus=%u), open AP DPDM\n",
+			new_state->vbus_status);
+		request_dpdm(bq, 0);
 	}
 
 
@@ -1435,7 +1470,8 @@ static int bq25890_usb_set_property(struct power_supply *psy,
 		enum power_supply_property psp,
 		const union power_supply_propval *val)
 {
-	int ret;
+	int ret = 0;
+	struct bq25890_state state;
 	struct bq25890_device *bq = power_supply_get_drvdata(psy);
 	switch (psp) {
 		case POWER_SUPPLY_PROP_USB_TYPE:
@@ -1453,19 +1489,41 @@ static int bq25890_usb_set_property(struct power_supply *psy,
 					break;
 				case POWER_SUPPLY_PD_ACTIVE:
 				case POWER_SUPPLY_PD_PPS_ACTIVE:
-					if (bq->state.online) {
-						dev_info(bq->dev, "PD Active set while charger online\n");
+					ret = bq25890_charger_get_state(bq, &state);
+					if (ret < 0) {
+						dev_warn(bq->dev,
+							 "PD Active: failed to refresh charger state: %d\n", ret);
+						break;
+					}
+
+					if (state.online) {
+						dev_info(bq->dev, "PD Active accepted (vbus=%u)\n",
+							 state.vbus_status);
 						bq->pdactive = 1;
 					} else {
-						dev_info(bq->dev, "PD Active set while charger offline, ignoring\n");
+						dev_info(bq->dev, "PD Active ignored while VBUS is offline\n");
 					}
 					break;
+
 				case POWER_SUPPLY_PD_INACTIVE:
-					if (!bq->state.online) {
-						dev_info(bq->dev, "PD Inactive set while charger offline\n");
+					ret = bq25890_charger_get_state(bq, &state);
+					if (ret < 0) {
+						dev_warn(bq->dev,
+							 "PD Inactive: failed to refresh charger state: %d\n", ret);
+						break;
+					}
+
+					if (!state.online ||
+					    state.vbus_status == BQ2589X_VBUS_USB_SDP ||
+					    state.vbus_status == BQ2589X_VBUS_USB_CDP) {
 						bq->pdactive = 0;
+						dev_info(bq->dev,
+							 "PD Inactive accepted (online=%u vbus=%u)\n",
+							 state.online, state.vbus_status);
 					} else {
-						dev_info(bq->dev, "PD Inactive set while charger online, ignoring to prevent DRP error\n");
+						dev_info(bq->dev,
+							 "PD Inactive ignored while charging source remains online (vbus=%u)\n",
+							 state.vbus_status);
 					}
 					break;
 			   default:break;
