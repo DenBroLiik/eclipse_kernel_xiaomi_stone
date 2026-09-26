@@ -84,6 +84,7 @@ struct rt_pd_manager_data {
 	struct tcpc_device *tcpc;
 	struct notifier_block pd_nb;
 	enum dr usb_dr;
+	bool host_detach_pending;
 	int usb_type_polling_cnt;
 	int sink_mv_pd;
 	int sink_ma_pd;
@@ -254,6 +255,7 @@ static void usb_dwork_handler(struct work_struct *work)
 	switch (usb_dr) {
 	case DR_IDLE:
 	case DR_MAX:
+		rpmd->host_detach_pending = false;
 		stop_usb_peripheral(rpmd);
 		stop_usb_host(rpmd);
 		break;
@@ -391,6 +393,36 @@ static int pd_tcp_notifier_call(struct notifier_block *nb,
 		    (new_state == TYPEC_ATTACHED_SNK ||
 		     new_state == TYPEC_ATTACHED_NORP_SRC ||
 		     new_state == TYPEC_ATTACHED_CUSTOM_SRC ||
+		     new_state == TYPEC_ATTACHED_DBGACC_SNK) &&
+		    rpmd->host_detach_pending &&
+		    extcon_get_state(rpmd->extcon, EXTCON_USB_HOST) > 0) {
+			/*
+			 * Some powered USB-C hubs briefly report a Type-C detach
+			 * while changing the phone from power SOURCE to power SINK.
+			 * The USB data role must remain HOST/DFP in that case.
+			 */
+			dev_err(rpmd->dev,
+				"Powered hub reattached as sink; preserving USB HOST data role\n");
+
+			cancel_delayed_work_sync(&rpmd->usb_dwork);
+			rpmd->host_detach_pending = false;
+			rpmd->usb_dr = DR_HOST;
+			usb_online_state = 1;
+
+			val.intval = noti->typec_state.polarity + 1;
+			rt_pd_set_psy_iio_property(rpmd,
+				RT_PD_IIO_TYPEC_CC_ORIENTATION, &val);
+
+			typec_set_data_role(rpmd->typec_port, TYPEC_HOST);
+			typec_set_pwr_role(rpmd->typec_port, TYPEC_SINK);
+			typec_set_pwr_opmode(rpmd->typec_port,
+				noti->typec_state.rp_level -
+				TYPEC_CC_VOLT_SNK_DFT);
+			typec_set_vconn_role(rpmd->typec_port, TYPEC_SINK);
+		} else if (old_state == TYPEC_UNATTACHED &&
+		    (new_state == TYPEC_ATTACHED_SNK ||
+		     new_state == TYPEC_ATTACHED_NORP_SRC ||
+		     new_state == TYPEC_ATTACHED_CUSTOM_SRC ||
 		     new_state == TYPEC_ATTACHED_DBGACC_SNK)) {
 			dev_err(rpmd->dev,
 				 "%s Charger plug in, polarity = %d\n",
@@ -422,6 +454,7 @@ static int pd_tcp_notifier_call(struct notifier_block *nb,
 			    new_state == TYPEC_UNATTACHED) {
 			dev_err(rpmd->dev, "%s Charger plug out\n", __func__);
 			usb_online_state = 0;
+			rpmd->host_detach_pending = false;
 			/*
 			 * report charger plug-out,
 			 * and disable device connection
@@ -432,6 +465,10 @@ static int pd_tcp_notifier_call(struct notifier_block *nb,
 		} else if (old_state == TYPEC_UNATTACHED &&
 			   (new_state == TYPEC_ATTACHED_SRC ||
 			    new_state == TYPEC_ATTACHED_DEBUG)) {
+			if (rpmd->host_detach_pending) {
+				cancel_delayed_work_sync(&rpmd->usb_dwork);
+				rpmd->host_detach_pending = false;
+			}
 			dev_err(rpmd->dev,
 				 "%s OTG plug in, polarity = %d\n",
 				 __func__, noti->typec_state.polarity);
@@ -461,11 +498,19 @@ static int pd_tcp_notifier_call(struct notifier_block *nb,
 		} else if ((old_state == TYPEC_ATTACHED_SRC ||
 			    old_state == TYPEC_ATTACHED_DEBUG) &&
 			    new_state == TYPEC_UNATTACHED) {
-			dev_err(rpmd->dev, "%s OTG plug out\n", __func__);
-			/* disable host connection */
+			/*
+			 * A powered hub can momentarily look detached while its
+			 * external charger changes our power role. Keep HOST alive
+			 * briefly; a real unplug still tears it down after debounce.
+			 */
+			dev_err(rpmd->dev,
+				"%s OTG detach; delaying host teardown for powered-hub transition\n",
+				__func__);
 			cancel_delayed_work_sync(&rpmd->usb_dwork);
+			rpmd->host_detach_pending = true;
 			rpmd->usb_dr = DR_IDLE;
-			schedule_delayed_work(&rpmd->usb_dwork, 0);
+			schedule_delayed_work(&rpmd->usb_dwork,
+				msecs_to_jiffies(750));
 		} else if (old_state == TYPEC_UNATTACHED &&
 			   new_state == TYPEC_ATTACHED_AUDIO) {
 			dev_err(rpmd->dev, "%s Audio plug in\n", __func__);
