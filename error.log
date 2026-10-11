@@ -9,6 +9,14 @@
  5088 | static int sde_crtc_atomic_check(struct drm_crtc *crtc,
       |            ^
 2 warnings generated.
+../lib/lz4/lz4.c:1772:5: warning: stack frame size (16496) exceeds limit (2048) in 'LZ4_compress_destSize' [-Wframe-larger-than]
+ 1772 | int LZ4_compress_destSize(const char *src, char *dst, int *srcSizePtr,
+      |     ^
+1 warning generated.
+../lib/lz4/lz4hc.c:2310:12: warning: stack frame size (66016) exceeds limit (2048) in 'LZ4HC_compress_optimal' [-Wframe-larger-than]
+ 2310 | static int LZ4HC_compress_optimal(LZ4HC_CCtx_internal *ctx,
+      |            ^
+1 warning generated.
 ../fs/d_path.c:429:1: warning: stack frame size (4224) exceeds limit (2048) in '__arm64_sys_getcwd' [-Wframe-larger-than]
   429 | SYSCALL_DEFINE2(getcwd, char __user *, buf, unsigned long, size)
       | ^
@@ -36,6 +44,10 @@
  5725 |         struct device *dev = &display->pdev->dev;
       |                        ^~~
 2 warnings generated.
+../drivers/platform/msm/sps/sps.c:2025:7: warning: unused variable 'bam_name' [-Wunused-variable]
+ 2025 |         char bam_name[MAX_MSG_LEN];
+      |              ^~~~~~~~
+1 warning generated.
 ../drivers/power/supply/battery_secrete/sha384_software.c:61:5: warning: stack frame size (2912) exceeds limit (2048) in 'sha3_256_hmac' [-Wframe-larger-than]
    61 | int sha3_256_hmac(unsigned char *key, int key_len, unsigned char *message, int msg_len, unsigned char *mac)
       |     ^
