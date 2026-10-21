@@ -1,3 +1,11 @@
+../lib/lz4/lz4.c:1772:5: warning: stack frame size (16496) exceeds limit (2048) in 'LZ4_compress_destSize' [-Wframe-larger-than]
+ 1772 | int LZ4_compress_destSize(const char *src, char *dst, int *srcSizePtr,
+      |     ^
+1 warning generated.
+../lib/lz4/lz4hc.c:2310:12: warning: stack frame size (66016) exceeds limit (2048) in 'LZ4HC_compress_optimal' [-Wframe-larger-than]
+ 2310 | static int LZ4HC_compress_optimal(LZ4HC_CCtx_internal *ctx,
+      |            ^
+1 warning generated.
 ../fs/kernfs/file.c:281:16: warning: stack frame size (4176) exceeds limit (2048) in 'kernfs_fop_write' [-Wframe-larger-than]
   281 | static ssize_t kernfs_fop_write(struct file *file, const char __user *user_buf,
       |                ^
@@ -9,14 +17,6 @@
  5088 | static int sde_crtc_atomic_check(struct drm_crtc *crtc,
       |            ^
 2 warnings generated.
-../lib/lz4/lz4.c:1772:5: warning: stack frame size (16496) exceeds limit (2048) in 'LZ4_compress_destSize' [-Wframe-larger-than]
- 1772 | int LZ4_compress_destSize(const char *src, char *dst, int *srcSizePtr,
-      |     ^
-1 warning generated.
-../lib/lz4/lz4hc.c:2310:12: warning: stack frame size (66016) exceeds limit (2048) in 'LZ4HC_compress_optimal' [-Wframe-larger-than]
- 2310 | static int LZ4HC_compress_optimal(LZ4HC_CCtx_internal *ctx,
-      |            ^
-1 warning generated.
 ../fs/d_path.c:429:1: warning: stack frame size (4224) exceeds limit (2048) in '__arm64_sys_getcwd' [-Wframe-larger-than]
   429 | SYSCALL_DEFINE2(getcwd, char __user *, buf, unsigned long, size)
       | ^
