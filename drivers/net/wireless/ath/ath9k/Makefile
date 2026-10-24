@@ -1,4 +1,10 @@
 # SPDX-License-Identifier: ISC
+# Keep the USB HTC transport private when linked alongside Qualcomm's vendor
+# WLAN stack, which defines unrelated functions with the same HTC names.
+ccflags-y += -Dhtc_start=ath9k_htc_transport_start
+ccflags-y += -Dhtc_stop=ath9k_htc_transport_stop
+ccflags-y += -Dhtc_connect_service=ath9k_htc_transport_connect_service
+
 ath9k-y +=	beacon.o \
 		gpio.o \
 		init.o \
