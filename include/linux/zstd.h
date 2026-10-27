@@ -242,6 +242,21 @@ size_t zstd_compress_cctx(zstd_cctx *cctx, void *dst, size_t dst_capacity,
 	const void *src, size_t src_size, const zstd_parameters *parameters);
 
 /**
+ * zstd_compress_cctx_reuse() - compress an independent frame with saved settings
+ * @cctx:         Context configured by a successful zstd_compress_cctx() call.
+ * @dst:          Destination buffer.
+ * @dst_capacity: Capacity of destination buffer.
+ * @src:          Source buffer.
+ * @src_size:     Source size, compatible with the configured workspace.
+ *
+ * Retains compression parameters, but resets the session so frames do not
+ * depend on preceding input. Caller must serialize access to the context.
+ * Return: Compressed size or a zstd error code.
+ */
+size_t zstd_compress_cctx_reuse(zstd_cctx *cctx, void *dst, size_t dst_capacity,
+	const void *src, size_t src_size);
+
+/**
  * zstd_create_cctx_advanced() - Create compression context
  * @custom_mem:   Custom allocator.
  *

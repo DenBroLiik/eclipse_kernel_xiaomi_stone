@@ -514,7 +514,7 @@ struct scan_cb {
  * @pno_cfg: default pno configuration
  * @extscan_cfg: default extscan configuration
  * @ie_whitelist: default ie whitelist attrs
- * @bt_a2dp_enabled: if bt a2dp is enabled
+ * @bt_a2dp_enabled: if Bluetooth A2DP or voice audio is active
  * @miracast_enabled: miracast enabled
  * @disable_timeout: command timeout disabled
  * @drop_bcn_on_chan_mismatch: drop bcn if channel mismatch

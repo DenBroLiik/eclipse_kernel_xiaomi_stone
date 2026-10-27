@@ -102,6 +102,7 @@
 #define LZ4_STATIC_LINKING_ONLY
 #endif
 #include "lz4.h"
+#include <linux/slab.h>
 /* see also "memory routines" below */
 
 /*-************************************
@@ -1772,22 +1773,18 @@ int LZ4_compress_destSize_extState(void *state, const char *src, char *dst,
 int LZ4_compress_destSize(const char *src, char *dst, int *srcSizePtr,
 			  int targetDstSize)
 {
-#if (LZ4_HEAPMODE)
-	LZ4_stream_t *const ctx = (LZ4_stream_t *)ALLOC(sizeof(
-		LZ4_stream_t)); /* malloc-calloc always properly aligned */
+	LZ4_stream_t *ctx;
+	int result;
+
+	/* This workspace alone is larger than an ARM64 kernel stack. */
+	ctx = kmalloc(sizeof(*ctx), GFP_NOWAIT | __GFP_NOWARN);
 	if (ctx == NULL)
 		return 0;
-#else
-	LZ4_stream_t ctxBody;
-	LZ4_stream_t *const ctx = &ctxBody;
-#endif
 
-	int result = LZ4_compress_destSize_extState_internal(
+	result = LZ4_compress_destSize_extState_internal(
 		ctx, src, dst, srcSizePtr, targetDstSize, 1);
 
-#if (LZ4_HEAPMODE)
-	FREEMEM(ctx);
-#endif
+	kfree(ctx);
 	return result;
 }
 

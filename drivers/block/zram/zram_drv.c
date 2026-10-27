@@ -288,7 +288,7 @@ static ssize_t idle_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t len)
 {
 	struct zram *zram = dev_to_zram(dev);
-	unsigned long nr_pages = zram->disksize >> PAGE_SHIFT;
+	unsigned long nr_pages;
 	int index;
 
 	if (!sysfs_streq(buf, "all"))
@@ -300,6 +300,7 @@ static ssize_t idle_store(struct device *dev,
 		return -EINVAL;
 	}
 
+	nr_pages = zram->disksize >> PAGE_SHIFT;
 	for (index = 0; index < nr_pages; index++) {
 		/*
 		 * Do not mark ZRAM_UNDER_WB slot as ZRAM_IDLE to close race.
@@ -408,6 +409,7 @@ static void reset_bdev(struct zram *zram)
 				BDI_CAP_SYNCHRONOUS_IO;
 	kvfree(zram->bitmap);
 	zram->bitmap = NULL;
+	zram->next_free_block = 1;
 }
 
 static ssize_t backing_dev_show(struct device *dev,
@@ -520,6 +522,7 @@ static ssize_t backing_dev_store(struct device *dev,
 	zram->backing_dev = backing_dev;
 	zram->bitmap = bitmap;
 	zram->nr_pages = nr_pages;
+	zram->next_free_block = 1;
 	/*
 	 * With writeback feature, zram does asynchronous IO so it's no longer
 	 * synchronous device so let's remove synchronous io flag. Othewise,
@@ -557,16 +560,26 @@ out:
 
 static unsigned long alloc_block_bdev(struct zram *zram)
 {
-	unsigned long blk_idx = 1;
+	unsigned long start = READ_ONCE(zram->next_free_block);
+	unsigned long blk_idx;
+
+	if (!start || start >= zram->nr_pages)
+		start = 1;
+	blk_idx = start;
 retry:
 	/* skip 0 bit to confuse zram.handle = 0 */
 	blk_idx = find_next_zero_bit(zram->bitmap, zram->nr_pages, blk_idx);
-	if (blk_idx == zram->nr_pages)
-		return 0;
+	if (blk_idx == zram->nr_pages) {
+		blk_idx = find_next_zero_bit(zram->bitmap, start, 1);
+		if (blk_idx == start)
+			return 0;
+	}
 
 	if (test_and_set_bit(blk_idx, zram->bitmap))
 		goto retry;
 
+	/* A stale hint only affects search order; the atomic bit claims ownership. */
+	WRITE_ONCE(zram->next_free_block, blk_idx + 1);
 	atomic64_inc(&zram->stats.bd_count);
 	return blk_idx;
 }
@@ -627,7 +640,7 @@ static ssize_t writeback_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t len)
 {
 	struct zram *zram = dev_to_zram(dev);
-	unsigned long nr_pages = zram->disksize >> PAGE_SHIFT;
+	unsigned long nr_pages;
 	unsigned long index;
 	struct bio bio;
 	struct bio_vec bio_vec;
@@ -649,6 +662,7 @@ static ssize_t writeback_store(struct device *dev,
 		goto release_init_lock;
 	}
 
+	nr_pages = zram->disksize >> PAGE_SHIFT;
 	if (!zram->backing_dev) {
 		ret = -ENODEV;
 		goto release_init_lock;
@@ -876,7 +890,7 @@ static ssize_t read_block_state(struct file *file, char __user *buf,
 	char *kbuf;
 	ssize_t index, written = 0;
 	struct zram *zram = file->private_data;
-	unsigned long nr_pages = zram->disksize >> PAGE_SHIFT;
+	unsigned long nr_pages;
 	struct timespec64 ts;
 
 	kbuf = kvmalloc(count, GFP_KERNEL);
@@ -890,6 +904,7 @@ static ssize_t read_block_state(struct file *file, char __user *buf,
 		return -EINVAL;
 	}
 
+	nr_pages = zram->disksize >> PAGE_SHIFT;
 	for (index = *ppos; index < nr_pages; index++) {
 		int copied;
 
@@ -1234,14 +1249,13 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
 	if (zram_test_flag(zram, index, ZRAM_WB)) {
 		struct bio_vec bvec;
 
+		handle = zram_get_element(zram, index);
 		zram_slot_unlock(zram, index);
 
 		bvec.bv_page = page;
 		bvec.bv_len = PAGE_SIZE;
 		bvec.bv_offset = 0;
-		return read_from_bdev(zram, &bvec,
-				zram_get_element(zram, index),
-				bio, partial_io);
+		return read_from_bdev(zram, &bvec, handle, bio, partial_io);
 	}
 
 	handle = zram_get_handle(zram, index);

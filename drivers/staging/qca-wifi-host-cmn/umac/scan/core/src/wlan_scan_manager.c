@@ -487,11 +487,14 @@ scm_update_passive_dwell_time(struct wlan_objmgr_vdev *vdev,
 	if (!psoc)
 		return;
 
-	if (policy_mgr_is_sta_connected_2g(psoc) &&
+	/* A tethering AP shares the same radio with BT as a station does. */
+	if ((policy_mgr_is_sta_connected_2g(psoc) ||
+	     policy_mgr_is_sap_go_on_2g(psoc)) &&
 	    !policy_mgr_is_hw_dbs_capable(psoc) &&
 	    ucfg_scan_get_bt_activity(psoc))
 		req->scan_req.dwell_time_passive =
-				PASSIVE_DWELL_TIME_BT_A2DP_ENABLED;
+			QDF_MIN(req->scan_req.dwell_time_passive,
+				PASSIVE_DWELL_TIME_BT_A2DP_ENABLED);
 }
 
 static const struct probe_time_dwell_time
@@ -600,9 +603,6 @@ static void scm_req_update_concurrency_params(struct wlan_objmgr_vdev *vdev,
 		go_peer_count =
 		wlan_util_get_peer_count_for_mode(pdev, QDF_P2P_GO_MODE);
 
-	if (!req->scan_req.scan_f_passive)
-		scm_update_passive_dwell_time(vdev, req);
-
 	if (policy_mgr_get_connection_count(psoc)) {
 		if (req->scan_req.scan_f_passive)
 			req->scan_req.dwell_time_passive =
@@ -630,6 +630,13 @@ static void scm_req_update_concurrency_params(struct wlan_objmgr_vdev *vdev,
 	 */
 
 	/*
+	 * SAP ACS defaults must precede the connected-client off-channel cap.
+	 * Otherwise the default overwrites the CTS-protected dwell time below.
+	 */
+	if (vdev->vdev_mlme.vdev_opmode == QDF_SAP_MODE)
+		req->scan_req.dwell_time_active_2g = SCM_ACTIVE_DWELL_TIME_SAP;
+
+	/*
 	 * For SAP, the dwell time cannot exceed 32 ms as it can't go
 	 * offchannel more than 32 ms. For Go, since we
 	 * advertise NOA, GO can have regular dwell time which is 40 ms.
@@ -653,13 +660,6 @@ static void scm_req_update_concurrency_params(struct wlan_objmgr_vdev *vdev,
 	if (policy_mgr_current_concurrency_is_mcc(psoc))
 		req->scan_req.min_rest_time =
 			scan_obj->scan_def.conc_max_rest_time;
-
-	/*
-	 * If scan req for SAP (ACS Sacn) use dwell_time_active_def as dwell
-	 * time for 2g channels instead of dwell_time_active_2g
-	 */
-	if (vdev->vdev_mlme.vdev_opmode == QDF_SAP_MODE)
-		req->scan_req.dwell_time_active_2g = SCM_ACTIVE_DWELL_TIME_SAP;
 
 	if (req->scan_req.scan_type == SCAN_TYPE_DEFAULT) {
 		/*
@@ -724,22 +724,15 @@ static void scm_req_update_concurrency_params(struct wlan_objmgr_vdev *vdev,
 				break;
 			}
 		} while (0);
+	}
 
-		if (ap_present) {
-			uint8_t ssid_num;
-
-			ssid_num = req->scan_req.num_ssids *
-					req->scan_req.num_bssid;
-			req->scan_req.repeat_probe_time =
-				scan_probe_time_dwell_time_map[
-					QDF_MIN(ssid_num,
-					SCAN_DWELL_TIME_PROBE_TIME_MAP_SIZE
-					- 1)].probe_time;
-			req->scan_req.n_probes =
-				(req->scan_req.repeat_probe_time > 0) ?
-				req->scan_req.dwell_time_active /
-				req->scan_req.repeat_probe_time : 0;
-		}
+	if (ndi_present) {
+		req->scan_req.dwell_time_active = SCM_ACTIVE_DWELL_TIME_NAN;
+		req->scan_req.dwell_time_active_2g =
+			QDF_MIN(req->scan_req.dwell_time_active_2g,
+				SCM_ACTIVE_DWELL_TIME_NAN);
+		scm_debug("NDP active modify dwell time 2ghz %d",
+			  req->scan_req.dwell_time_active_2g);
 	}
 
 	if (ap_present) {
@@ -757,7 +750,7 @@ static void scm_req_update_concurrency_params(struct wlan_objmgr_vdev *vdev,
 		 * 2.if SAP is on 5G/6G channel then update dwell time active.
 		 */
 		if (sap_peer_count) {
-			if (policy_mgr_is_hw_dbs_capable(psoc) &&
+			if (!policy_mgr_is_hw_dbs_capable(psoc) ||
 			    (WLAN_REG_IS_5GHZ_CH_FREQ(ap_chan_freq) ||
 			    WLAN_REG_IS_6GHZ_CHAN_FREQ(ap_chan_freq))) {
 				req->scan_req.dwell_time_active =
@@ -785,22 +778,29 @@ static void scm_req_update_concurrency_params(struct wlan_objmgr_vdev *vdev,
 		}
 	}
 
-	if (ndi_present) {
-		req->scan_req.dwell_time_active =
-						SCM_ACTIVE_DWELL_TIME_NAN;
-		req->scan_req.dwell_time_active_2g =
-			QDF_MIN(req->scan_req.dwell_time_active_2g,
-			SCM_ACTIVE_DWELL_TIME_NAN);
-		scm_debug("NDP active modify dwell time 2ghz %d",
-			req->scan_req.dwell_time_active_2g);
-	}
-
 	if (sta_active) {
 		req->scan_req.dwell_time_active_6g =
 				scan_obj->scan_def.active_dwell_time_6g_conc;
 		req->scan_req.dwell_time_passive_6g =
 				scan_obj->scan_def.passive_dwell_time_6g_conc;
 	}
+
+	if (ap_present && req->scan_req.scan_type == SCAN_TYPE_DEFAULT) {
+		u32 ssid_num = req->scan_req.num_ssids *
+			       req->scan_req.num_bssid;
+
+		ssid_num = QDF_MIN(ssid_num,
+				   SCAN_DWELL_TIME_PROBE_TIME_MAP_SIZE - 1);
+		req->scan_req.repeat_probe_time =
+			scan_probe_time_dwell_time_map[ssid_num].probe_time;
+		req->scan_req.n_probes = req->scan_req.repeat_probe_time ?
+			req->scan_req.dwell_time_active /
+			req->scan_req.repeat_probe_time : 0;
+	}
+
+	/* Apply audio protection after AP/NDI defaults have finished updating it. */
+	if (!req->scan_req.scan_f_passive)
+		scm_update_passive_dwell_time(vdev, req);
 }
 
 /**

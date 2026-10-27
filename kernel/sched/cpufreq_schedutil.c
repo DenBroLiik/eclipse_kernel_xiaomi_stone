@@ -48,6 +48,7 @@ struct sugov_policy {
 	s64			down_rate_delay_ns;
 	unsigned int		next_freq;
 	unsigned int		cached_raw_freq;
+	unsigned int		cached_resolved_freq;
 
 	/* The next fields are only needed if fast switch cannot be used: */
 	struct			irq_work irq_work;
@@ -124,6 +125,10 @@ static bool sugov_should_update_freq(struct sugov_policy *sg_policy, u64 time)
 		return true;
 	}
 
+	/* A shared-policy callback may defer committing a forced update. */
+	if (sg_policy->need_freq_update)
+		return true;
+
 	/* No need to recalculate next freq for min_rate_limit_us
 	 * at least. However we might still decide to further rate
 	 * limit once frequency change direction is decided, according
@@ -173,11 +178,15 @@ static inline bool conservative_pl(void)
 static bool sugov_update_next_freq(struct sugov_policy *sg_policy, u64 time,
 				   unsigned int next_freq)
 {
-	if (sg_policy->next_freq == next_freq)
+	if (sg_policy->need_freq_update) {
+		/* Policy limits must take effect without directional rate delays. */
+		sg_policy->need_freq_update = false;
+		if (sg_policy->next_freq == next_freq)
+			return false;
+	} else if (sg_policy->next_freq == next_freq ||
+		   sugov_up_down_rate_limit(sg_policy, time, next_freq)) {
 		return false;
-
-	if (sugov_up_down_rate_limit(sg_policy, time, next_freq))
-		return false;
+	}
 
 	sg_policy->next_freq = next_freq;
 	sg_policy->last_freq_update_time = time;
@@ -314,24 +323,27 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 
 	trace_sugov_next_freq(policy->cpu, util, max, freq);
 	if (freq == sg_policy->cached_raw_freq && !sg_policy->need_freq_update)
-		return sg_policy->next_freq;
+		return sg_policy->cached_resolved_freq;
 
-	sg_policy->need_freq_update = false;
 	sg_policy->cached_raw_freq = freq;
 	l_freq = cpufreq_driver_resolve_freq(policy, freq);
 	idx = cpufreq_frequency_table_target(policy, freq, CPUFREQ_RELATION_H);
 	h_freq = policy->freq_table[idx].frequency;
 	h_freq = clamp(h_freq, policy->min, policy->max);
 	if (l_freq <= h_freq || l_freq == policy->min)
-		return l_freq;
+		goto out;
 
 	/*
 	 * Use the frequency step below if the calculated frequency is <20%
 	 * higher than it.
 	 */
 	if (mult_frac(100, freq - h_freq, l_freq - h_freq) < 20)
-		return h_freq;
+		/* Fast-switch drivers may use the index cached by resolve_freq(). */
+		l_freq = cpufreq_driver_resolve_freq(policy, h_freq);
 
+out:
+	/* A rate-limited request is not necessarily the committed next_freq. */
+	sg_policy->cached_resolved_freq = l_freq;
 	return l_freq;
 }
 
@@ -1181,6 +1193,7 @@ static void sugov_tunables_save(struct cpufreq_policy *policy,
 	cached->hispeed_freq = tunables->hispeed_freq;
 	cached->up_rate_limit_us = tunables->up_rate_limit_us;
 	cached->down_rate_limit_us = tunables->down_rate_limit_us;
+	cached->iowait_boost_enable = tunables->iowait_boost_enable;
 }
 
 static void sugov_clear_global_tunables(void)
@@ -1204,8 +1217,9 @@ static void sugov_tunables_restore(struct cpufreq_policy *policy)
 	tunables->hispeed_freq = cached->hispeed_freq;
 	tunables->up_rate_limit_us = cached->up_rate_limit_us;
 	tunables->down_rate_limit_us = cached->down_rate_limit_us;
-	sg_policy->up_rate_delay_ns = cached->up_rate_limit_us;
-	sg_policy->down_rate_delay_ns = cached->down_rate_limit_us;
+	tunables->iowait_boost_enable = cached->iowait_boost_enable;
+	sg_policy->up_rate_delay_ns = cached->up_rate_limit_us * NSEC_PER_USEC;
+	sg_policy->down_rate_delay_ns = cached->down_rate_limit_us * NSEC_PER_USEC;
 	update_min_rate_limit_ns(sg_policy);
 }
 
@@ -1348,8 +1362,9 @@ static int sugov_start(struct cpufreq_policy *policy)
 	sg_policy->next_freq			= 0;
 	sg_policy->work_in_progress		= false;
 	sg_policy->limits_changed		= false;
-	sg_policy->need_freq_update		= false;
+	sg_policy->need_freq_update		= true;
 	sg_policy->cached_raw_freq		= 0;
+	sg_policy->cached_resolved_freq	= 0;
 
 	for_each_cpu(cpu, policy->cpus) {
 		struct sugov_cpu *sg_cpu = &per_cpu(sugov_cpu, cpu);
@@ -1410,7 +1425,7 @@ static void sugov_limits(struct cpufreq_policy *policy)
 		 * to do any sort of additional validation here.
 		 */
 		freq = cpufreq_driver_resolve_freq(policy, freq);
-		sg_policy->cached_raw_freq = freq;
+		sg_policy->need_freq_update = true;
 		sugov_fast_switch(sg_policy, now, freq);
 		raw_spin_unlock_irqrestore(&sg_policy->update_lock, flags);
 	}

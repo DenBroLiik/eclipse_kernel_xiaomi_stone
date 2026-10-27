@@ -194,6 +194,15 @@ size_t zstd_compress_cctx(zstd_cctx *cctx, void *dst, size_t dst_capacity,
 }
 EXPORT_SYMBOL(zstd_compress_cctx);
 
+size_t zstd_compress_cctx_reuse(zstd_cctx *cctx, void *dst, size_t dst_capacity,
+	const void *src, size_t src_size)
+{
+	ZSTD_FORWARD_IF_ERR(ZSTD_CCtx_reset(cctx, ZSTD_reset_session_only));
+	ZSTD_FORWARD_IF_ERR(ZSTD_CCtx_setPledgedSrcSize(cctx, src_size));
+	return ZSTD_compress2(cctx, dst, dst_capacity, src, src_size);
+}
+EXPORT_SYMBOL(zstd_compress_cctx_reuse);
+
 size_t zstd_compress_using_cdict(zstd_cctx *cctx, void *dst,
 	size_t dst_capacity, const void *src, size_t src_size,
 	const ZSTD_CDict *cdict)

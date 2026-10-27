@@ -250,6 +250,8 @@ struct link_free {
 };
 
 struct zs_pool {
+	/* Avoid competing full-pool passes from reclaim and sysfs compaction. */
+	atomic_t compaction_in_progress;
 	const char *name;
 
 	struct size_class *size_class[ZS_SIZE_CLASSES];
@@ -2305,6 +2307,10 @@ unsigned long zs_compact(struct zs_pool *pool)
 	struct size_class *class;
 	unsigned long pages_freed = 0;
 
+	/* A second pass would compete for class locks and repeat the same work. */
+	if (atomic_xchg(&pool->compaction_in_progress, 1))
+		return 0;
+
 	for (i = ZS_SIZE_CLASSES - 1; i >= 0; i--) {
 		class = pool->size_class[i];
 		if (!class)
@@ -2314,6 +2320,7 @@ unsigned long zs_compact(struct zs_pool *pool)
 		pages_freed += __zs_compact(pool, class);
 	}
 	atomic_long_add(pages_freed, &pool->stats.pages_compacted);
+	atomic_set(&pool->compaction_in_progress, 0);
 
 	return pages_freed;
 }
@@ -2398,6 +2405,7 @@ struct zs_pool *zs_create_pool(const char *name)
 	pool = kzalloc(sizeof(*pool), GFP_KERNEL);
 	if (!pool)
 		return NULL;
+	atomic_set(&pool->compaction_in_progress, 0);
 
 	init_deferred_free(pool);
 

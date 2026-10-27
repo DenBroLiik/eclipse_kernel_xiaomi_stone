@@ -42,9 +42,6 @@
 #include "lpm-levels.h"
 #include <trace/events/power.h>
 #include <linux/clk.h>
-#ifdef CONFIG_DRM_PANEL
-#include <drm/drm_panel.h>
-#endif
 #define CREATE_TRACE_POINTS
 #include <trace/events/trace_msm_low_power.h>
 
@@ -96,41 +93,11 @@ static void cluster_prepare(struct lpm_cluster *cluster,
 		const struct cpumask *cpu, int child_idx, bool from_idle,
 		int64_t time);
 
-#ifdef CONFIG_DRM_PANEL
-static bool __read_mostly sleep_disabled = true;
-module_param_named(sleep_disabled, sleep_disabled, bool, 0444);
-
-static int lpm_drm_panel_notify(struct notifier_block *nb,
-		unsigned long val, void *ptr)
-{
-	struct drm_panel_notifier *evdata = ptr;
-	int *blank = evdata->data;
-
-	switch (*blank) {
-	case DRM_PANEL_BLANK_UNBLANK:
-		if (val == DRM_PANEL_EARLY_EVENT_BLANK) {
-			sleep_disabled = true;
-			wake_up_all_idle_cpus();
-		}
-		break;
-	case DRM_PANEL_BLANK_POWERDOWN:
-	case DRM_PANEL_BLANK_LP:
-		if (val == DRM_PANEL_EARLY_EVENT_BLANK) {
-			sleep_disabled = false;
-			wake_up_all_idle_cpus();
-		}
-		break;
-	default:
-		break;
-	};
-
-	return NOTIFY_OK;
-}
-
-#else
+/* Preserve boot-time control and allow the vendor post-boot power policy to
+ * enable idle. The old, unregistered panel callback left this permanently off.
+ */
 static bool sleep_disabled;
 module_param_named(sleep_disabled, sleep_disabled, bool, 0664);
-#endif
 
 #ifdef CONFIG_SMP
 static int lpm_cpu_qos_notify(struct notifier_block *nb,

@@ -1,11 +1,11 @@
 # stone/moonstone daily profile
 
 This remains Linux 5.4.304, using the existing device-specific Qualcomm/Xiaomi
-sources. The experimental peripheral expansion from 132e475606fb is removed.
-The imported RTL8821CU driver and its Kbuild integration are removed entirely.
-HID/MIDI/mass-storage gadgets, network filesystems and container additions are
-also disabled. Existing ADB/MTP, phone hardware drivers and built-in USB support
-from the pre-expansion baseline are retained.
+sources. At the user's request on 2026-10-27, restore the peripheral expansion
+from `132e475606fb` (NEW function), including RTL8821CU and its Kbuild integration,
+external USB Wi-Fi/Bluetooth/serial/modem support, HID/MIDI/mass-storage gadgets,
+network filesystems and PID/IPC namespaces. MEMCG and USER_NS remain disabled.
+The earlier daily profile remains available in commit `e2d657bc18de`.
 
 Keep the KernelSU branch-link hook fix, ARM64 mitigations, SELinux, thermal/BCL
 protections, pstore, schedutil, CPU idle, ThinLTO and zram/writeback. Keep test
@@ -18,7 +18,98 @@ With ARM64 and 4 KiB pages, the table uses 8 fewer bytes per logical page (about
 2 MiB per GiB of configured zram). This is a source-level overhead reduction,
 not evidence of measured battery life or application-speed gains.
 
+## CPU frequency and Bluetooth coexistence corrections (2026-10-27)
+
+- Cache the resolved frequency separately from the committed request. Previously
+  a directionally rate-limited request poisoned the raw-frequency cache: a later
+  identical utilization request returned the old committed frequency indefinitely.
+  This affected both ramp-up and ramp-down, including idle requests with raw zero.
+- Retain need_freq_update until commit, bypass directional delays for policy-limit
+  changes, and resolve the first request after governor start. The fast limits
+  callback marks its immediate request forced as well.
+  A forced update deferred by a shared-policy CONTINUE callback remains eligible
+  at the next callback instead of being blocked by the minimum interval.
+- Resolve the lower frequency-table step again when the local <20% rounding rule
+  selects it. Qualcomm fast switch consumes policy->cached_resolved_idx, so merely
+  returning the lower frequency previously left it using the higher table index.
+- Preserve iowait_boost_enable on governor exit/reinit. Restore rate delays in
+  nanoseconds consistently (start also initializes them before callbacks run).
+  Default rates, boost settings, frequencies and voltages are unchanged.
+- Include Bluetooth voice, not just A2DP, in the scan audio-activity flag. Otherwise
+  music stopping during a call cleared scan protection while voice was active.
+- Extend the existing non-DBS 2.4 GHz station scan dwell cap to a 2.4 GHz SAP/GO.
+  Use min(current, 28 ms), so an already shorter dwell is not increased. This
+  applies at the existing active-scan call site; explicit passive scans and
+  regulatory/DFS channel checks are unchanged. DBS capable radios retain their
+  existing dwell behaviour. This is limited scan-contention mitigation, not a
+  claim that firmware airtime allocation or the reported call stalls are fixed.
+- Pass display->drm_conn to the dimlayer sysfs backlight callback instead of
+  evaluating an uninitialized local connector pointer. The current backlight
+  implementation does not dereference that argument; this removes undefined
+  input and its compiler warning without changing brightness policy.
+
+Host regressions compile the actual decision functions against small API stubs:
+
+```
+python3 tools/testing/selftests/cpufreq/sugov-regression.py
+python3 tools/testing/selftests/net/wlan-coex-regression.py
+```
+
+These do not test scheduler concurrency, RF behaviour or device boot. During
+read-only inspection, the connected moonstone reported schedutil, an active
+2437 MHz hotspot, regulatory country BY and available 5 GHz AP channels 36-140.
+No channel, radio mode, codec, volume, thermal limit or cellular setting was
+changed by the inspection. A separate user-authorized silent playback test may
+exercise A2DP without reproducing actual music or HFP voice traffic.
+
+5 GHz support is already present; forcing channels or antenna/coexistence modes
+without board/firmware evidence is inappropriate. Compare a 5 GHz-only AP on
+legal non-DFS channels when the user can interrupt tethering. For ordinary
+cellular calls, capture RAT/data/IMS state during the failure before attributing
+the upstream outage to WLAN; the idle snapshot cannot establish VoLTE behaviour.
+
 ## Linux 6.x status
+
+### Selected 6.18 memory-management backports (2026-10-27)
+
+The daily 5.4 tree now adapts two narrowly scoped behaviours from ACK 6.18.33
+(`182172ddb27b1e99ab3f2e3a511fa14643e9c6a7`):
+
+- Page-sized zstd workspaces, following `drivers/block/zram/backend_zstd.c`.
+  Zram still exposes algorithm `zstd` and uses compression level 3. Internally,
+  its Crypto API transform is `zstd-zram`, configured with
+  `zstd_get_params(3, PAGE_SIZE)`. General `zstd` and its scomp interface retain
+  unknown-size parameters and accept arbitrary input lengths. The zram profile
+  accepts only a full page and rejects decoded lengths different from PAGE_SIZE.
+  Parameters are cached at context initialization, not recomputed per operation.
+  Compression/decompression do not allocate new memory after initialization.
+- Per-pool compaction admission, following `mm/zsmalloc.c`. An atomic flag skips
+  duplicate concurrent full-pool compactions while allowing different pools to
+  compact independently. The existing 5.4 migration and class-lock implementation
+  is retained; the 6.18 allocator is not copied wholesale.
+
+This tree already has zstd 1.5.8, while the reference has 1.5.7; no codec downgrade
+or wholesale replacement was made. Tests compile this tree's actual 1.5.8 codec
+and Crypto API helper bodies on the host with allocator/platform stubs, ASan and
+UBSan. At 4 KiB PAGE_SIZE, compression workspace bounds are 1,303,568 bytes for
+unknown-size level 3 and 90,128 bytes for page-sized level 3: 1,213,440 bytes less
+per stream (~9.26 MiB for eight streams). These are workspace bounds, not a
+measurement of free RAM on the phone. Decompression workspace is unchanged.
+
+Tests cover cross-profile decoding, malformed/truncated/wrong-size frames,
+initialization allocation failures, registration unwind, no hot-path allocation,
+and actual zs_compact admission with concurrent host threads and C11 atomics.
+Host tests cannot validate kernel reclaim concurrency, phone latency, memory
+pressure behaviour or battery consumption.
+
+```
+python3 ../tests/test-zstd-zram.py
+python3 ../tests/test-zsmalloc-compaction.py
+```
+
+MGLRU, folio-based MM, DAMON and modern memcg are not enabled by pretending they
+are configuration toggles. This tree's incomplete memcg integration and vendor
+MM dependencies require a separate audited port before those can be considered.
 
 No validated 6.x device port or compatible ROM/vendor integration was established
 for this checkout. An announcement of SingkoKernel 6.1.167 dated April 1, 2026

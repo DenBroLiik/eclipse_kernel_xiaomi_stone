@@ -5678,7 +5678,6 @@ static ssize_t sysfs_dimlayer_exposure_write(struct device *dev,
 {
 	struct dsi_display *display;
 	struct dsi_panel *panel;
-	struct drm_connector *connector;
 	bool status;
 	int rc = 0;
 	display = dev_get_drvdata(dev);
@@ -5693,7 +5692,8 @@ static ssize_t sysfs_dimlayer_exposure_write(struct device *dev,
 	}
 	panel = display->panel;
 	panel->dimlayer_exposure = status;
-	dsi_display_set_backlight(connector, display, panel->bl_config.bl_level);
+	dsi_display_set_backlight(display->drm_conn, display,
+				  panel->bl_config.bl_level);
 	return count;
 }
 #endif

@@ -22,18 +22,16 @@ struct zstd_ctx {
 	zstd_dctx *dctx;
 	void *cwksp;
 	void *dwksp;
+	zstd_parameters params;
+	unsigned int src_size;
+	bool params_ready;
 };
-
-static zstd_parameters zstd_params(void)
-{
-	return zstd_get_params(ZSTD_DEF_LEVEL, 0);
-}
 
 static int zstd_comp_init(struct zstd_ctx *ctx)
 {
 	int ret = 0;
-	const zstd_parameters params = zstd_params();
-	const size_t wksp_size = zstd_cctx_workspace_bound(&params.cParams);
+	const size_t wksp_size =
+		zstd_cctx_workspace_bound(&ctx->params.cParams);
 
 	ctx->cwksp = vzalloc(wksp_size);
 	if (!ctx->cwksp) {
@@ -90,10 +88,13 @@ static void zstd_decomp_exit(struct zstd_ctx *ctx)
 	ctx->dctx = NULL;
 }
 
-static int __zstd_init(void *ctx)
+static int __zstd_init(struct zstd_ctx *ctx, unsigned int src_size)
 {
 	int ret;
 
+	ctx->params = zstd_get_params(ZSTD_DEF_LEVEL, src_size);
+	ctx->src_size = src_size;
+	ctx->params_ready = false;
 	ret = zstd_comp_init(ctx);
 	if (ret)
 		return ret;
@@ -112,7 +113,7 @@ static void *zstd_alloc_ctx(struct crypto_scomp *tfm)
 	if (!ctx)
 		return ERR_PTR(-ENOMEM);
 
-	ret = __zstd_init(ctx);
+	ret = __zstd_init(ctx, 0);
 	if (ret) {
 		kfree(ctx);
 		return ERR_PTR(ret);
@@ -125,7 +126,15 @@ static int zstd_init(struct crypto_tfm *tfm)
 {
 	struct zstd_ctx *ctx = crypto_tfm_ctx(tfm);
 
-	return __zstd_init(ctx);
+	return __zstd_init(ctx, 0);
+}
+
+static int zstd_zram_init(struct crypto_tfm *tfm)
+{
+	struct zstd_ctx *ctx = crypto_tfm_ctx(tfm);
+
+	/* Like the 6.18 zram backend, size the workspace for a single page. */
+	return __zstd_init(ctx, PAGE_SIZE);
 }
 
 static void __zstd_exit(void *ctx)
@@ -152,11 +161,22 @@ static int __zstd_compress(const u8 *src, unsigned int slen,
 {
 	size_t out_len;
 	struct zstd_ctx *zctx = ctx;
-	const zstd_parameters params = zstd_params();
 
-	out_len = zstd_compress_cctx(zctx->cctx, dst, *dlen, src, slen, &params);
-	if (zstd_is_error(out_len))
+	if (zctx->src_size && slen != zctx->src_size)
 		return -EINVAL;
+
+	if (zctx->src_size && zctx->params_ready)
+		out_len = zstd_compress_cctx_reuse(zctx->cctx, dst, *dlen,
+						 src, slen);
+	else
+		out_len = zstd_compress_cctx(zctx->cctx, dst, *dlen, src, slen,
+					     &zctx->params);
+	if (zstd_is_error(out_len)) {
+		zctx->params_ready = false;
+		return -EINVAL;
+	}
+	if (zctx->src_size)
+		zctx->params_ready = true;
 	*dlen = out_len;
 	return 0;
 }
@@ -183,7 +203,8 @@ static int __zstd_decompress(const u8 *src, unsigned int slen,
 	struct zstd_ctx *zctx = ctx;
 
 	out_len = zstd_decompress_dctx(zctx->dctx, dst, *dlen, src, slen);
-	if (zstd_is_error(out_len))
+	if (zstd_is_error(out_len) ||
+	    (zctx->src_size && out_len != zctx->src_size))
 		return -EINVAL;
 	*dlen = out_len;
 	return 0;
@@ -217,6 +238,20 @@ static struct crypto_alg alg = {
 	.coa_decompress		= zstd_decompress } }
 };
 
+/* Keep the general-purpose zstd contract and workspace unchanged. */
+static struct crypto_alg zram_alg = {
+	.cra_name		= "zstd-zram",
+	.cra_driver_name	= "zstd-zram-generic",
+	.cra_flags		= CRYPTO_ALG_TYPE_COMPRESS,
+	.cra_ctxsize		= sizeof(struct zstd_ctx),
+	.cra_module		= THIS_MODULE,
+	.cra_init		= zstd_zram_init,
+	.cra_exit		= zstd_exit,
+	.cra_u			= { .compress = {
+	.coa_compress		= zstd_compress,
+	.coa_decompress		= zstd_decompress } }
+};
+
 static struct scomp_alg scomp = {
 	.alloc_ctx		= zstd_alloc_ctx,
 	.free_ctx		= zstd_free_ctx,
@@ -239,13 +274,23 @@ static int __init zstd_mod_init(void)
 
 	ret = crypto_register_scomp(&scomp);
 	if (ret)
-		crypto_unregister_alg(&alg);
+		goto unregister_alg;
 
+	ret = crypto_register_alg(&zram_alg);
+	if (ret)
+		goto unregister_scomp;
+	return 0;
+
+unregister_scomp:
+	crypto_unregister_scomp(&scomp);
+unregister_alg:
+	crypto_unregister_alg(&alg);
 	return ret;
 }
 
 static void __exit zstd_mod_fini(void)
 {
+	crypto_unregister_alg(&zram_alg);
 	crypto_unregister_alg(&alg);
 	crypto_unregister_scomp(&scomp);
 }
@@ -256,3 +301,4 @@ module_exit(zstd_mod_fini);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Zstd Compression Algorithm");
 MODULE_ALIAS_CRYPTO("zstd");
+MODULE_ALIAS_CRYPTO("zstd-zram");

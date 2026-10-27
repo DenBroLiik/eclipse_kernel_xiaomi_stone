@@ -47,7 +47,12 @@ static void zcomp_strm_free(struct zcomp_strm *zstrm)
  */
 static int zcomp_strm_init(struct zcomp_strm *zstrm, struct zcomp *comp)
 {
-	zstrm->tfm = crypto_alloc_comp(comp->name, 0, 0);
+	const char *driver = comp->name;
+
+	/* Userspace still selects "zstd"; only zram uses page-sized contexts. */
+	if (!strcmp(driver, "zstd"))
+		driver = "zstd-zram";
+	zstrm->tfm = crypto_alloc_comp(driver, 0, 0);
 	/*
 	 * allocate 2 pages. 1 for compressed data, plus 1 extra for the
 	 * case when compressed size is larger than the original one
