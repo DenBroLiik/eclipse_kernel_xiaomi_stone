@@ -1444,8 +1444,11 @@ static void rmnet_map_send_agg_skb(struct rmnet_port *port, unsigned long flags)
 	port->agg_count = 0;
 	memset(&port->agg_time, 0, sizeof(port->agg_time));
 	port->agg_state = 0;
-	spin_unlock_irqrestore(&port->agg_lock, flags);
+	/* Serialize cancellation with the next aggregate's timer start.
+	 * The timer callback only queues work; it never takes agg_lock.
+	 */
 	hrtimer_cancel(&port->hrtimer);
+	spin_unlock_irqrestore(&port->agg_lock, flags);
 	dev_queue_xmit(agg_skb);
 }
 
@@ -1603,25 +1606,13 @@ void rmnet_map_tx_aggregate_exit(struct rmnet_port *port)
 void rmnet_map_tx_qmap_cmd(struct sk_buff *qmap_skb)
 {
 	struct rmnet_port *port;
-	struct sk_buff *agg_skb;
 	unsigned long flags;
 
 	port = rmnet_get_port(qmap_skb->dev);
 
 	if (port && (port->data_format & RMNET_EGRESS_FORMAT_AGGREGATION)) {
 		spin_lock_irqsave(&port->agg_lock, flags);
-		if (port->agg_skb) {
-			agg_skb = port->agg_skb;
-			port->agg_skb = 0;
-			port->agg_count = 0;
-			memset(&port->agg_time, 0, sizeof(port->agg_time));
-			port->agg_state = 0;
-			spin_unlock_irqrestore(&port->agg_lock, flags);
-			hrtimer_cancel(&port->hrtimer);
-			dev_queue_xmit(agg_skb);
-		} else {
-			spin_unlock_irqrestore(&port->agg_lock, flags);
-		}
+		rmnet_map_send_agg_skb(port, flags);
 	}
 
 	dev_queue_xmit(qmap_skb);
