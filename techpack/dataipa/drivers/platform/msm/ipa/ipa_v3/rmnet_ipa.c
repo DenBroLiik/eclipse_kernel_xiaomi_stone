@@ -1198,6 +1198,7 @@ static netdev_tx_t ipa3_wwan_xmit(struct sk_buff *skb, struct net_device *dev)
 	bool qmap_check;
 	struct ipa3_wwan_private *wwan_ptr = netdev_priv(dev);
 	unsigned long flags;
+	unsigned int skb_len;
 
 	if (rmnet_ipa3_ctx->ipa_config_is_apq) {
 		IPAWANERR_RL("IPA embedded data on APQ platform\n");
@@ -1293,6 +1294,8 @@ send:
 	 * both data packets and command will be routed to
 	 * IPA_CLIENT_Q6_WAN_CONS based on status configuration
 	 */
+	/* Completion can free skb as soon as IPA accepts it. */
+	skb_len = skb->len;
 	ret = ipa3_tx_dp(IPA_CLIENT_APPS_WAN_PROD, skb, NULL);
 	if (ret) {
 		atomic_dec(&wwan_ptr->outstanding_pkts);
@@ -1301,14 +1304,15 @@ send:
 				dev->name);
 			dev_kfree_skb_any(skb);
 			dev->stats.tx_dropped++;
-			return NETDEV_TX_OK;
+			ret = NETDEV_TX_OK;
+			goto out;
 		}
 		ret = NETDEV_TX_BUSY;
 		goto out;
 	}
 
 	dev->stats.tx_packets++;
-	dev->stats.tx_bytes += skb->len;
+	dev->stats.tx_bytes += skb_len;
 	ret = NETDEV_TX_OK;
 out:
 	if (atomic_read(&wwan_ptr->outstanding_pkts) == 0) {
