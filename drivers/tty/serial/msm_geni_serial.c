@@ -810,7 +810,7 @@ static int msm_geni_serial_power_on(struct uart_port *uport)
 			return ret;
 		}
 	}
-	return 0;
+	return ret < 0 ? ret : 0;
 }
 
 static void msm_geni_serial_power_off(struct uart_port *uport)
@@ -1332,8 +1332,8 @@ static void msm_geni_serial_start_tx(struct uart_port *uport)
 		if (msm_port->tx_dma)
 			goto check_flow_ctrl;
 
-		if (msm_geni_serial_prep_dma_tx(uport) == -EPERM) {
-			IPC_LOG_MSG(msm_port->ipc_log_tx, "%s: tx_en=0,\n",
+		if (msm_geni_serial_prep_dma_tx(uport)) {
+			IPC_LOG_MSG(msm_port->ipc_log_tx, "%s: DMA TX not started,\n",
 								__func__);
 			goto exit_start_tx;
 		}
@@ -1990,20 +1990,19 @@ static int msm_geni_serial_handle_dma_tx(struct uart_port *uport)
 	msm_port->tx_dma = (dma_addr_t)NULL;
 	msm_port->xmit_size = 0;
 
-	if (!uart_circ_empty(xmit))
-		msm_geni_serial_prep_dma_tx(uport);
-	else {
-		/*
-		 * This will balance out the power vote put in during start_tx
-		 * allowing the device to suspend.
-		 */
-		if (!uart_console(uport)) {
-			IPC_LOG_MSG(msm_port->ipc_log_misc,
-				"%s.Tx sent out, Power off\n", __func__);
-			msm_geni_serial_power_off(uport);
-		}
-		uart_write_wakeup(uport);
+	if (!uart_circ_empty(xmit) && !msm_geni_serial_prep_dma_tx(uport))
+		return 0;
+
+	/*
+	 * Balance the power vote put in during start_tx when no DMA transfer
+	 * remains, including setup failures. Pending bytes stay in xmit.
+	 */
+	if (!uart_console(uport)) {
+		IPC_LOG_MSG(msm_port->ipc_log_misc,
+			"%s.No DMA transfer, Power off\n", __func__);
+		msm_geni_serial_power_off(uport);
 	}
+	uart_write_wakeup(uport);
 	return 0;
 }
 
