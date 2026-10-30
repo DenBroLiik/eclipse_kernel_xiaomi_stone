@@ -18,7 +18,7 @@ With ARM64 and 4 KiB pages, the table uses 8 fewer bytes per logical page (about
 2 MiB per GiB of configured zram). This is a source-level overhead reduction,
 not evidence of measured battery life or application-speed gains.
 
-## CPU frequency and Bluetooth coexistence corrections (2026-10-27)
+## CPU frequency corrections (2026-10-27)
 
 - Cache the resolved frequency separately from the committed request. Previously
   a directionally rate-limited request poisoned the raw-frequency cache: a later
@@ -35,14 +35,6 @@ not evidence of measured battery life or application-speed gains.
 - Preserve iowait_boost_enable on governor exit/reinit. Restore rate delays in
   nanoseconds consistently (start also initializes them before callbacks run).
   Default rates, boost settings, frequencies and voltages are unchanged.
-- Include Bluetooth voice, not just A2DP, in the scan audio-activity flag. Otherwise
-  music stopping during a call cleared scan protection while voice was active.
-- Extend the existing non-DBS 2.4 GHz station scan dwell cap to a 2.4 GHz SAP/GO.
-  Use min(current, 28 ms), so an already shorter dwell is not increased. This
-  applies at the existing active-scan call site; explicit passive scans and
-  regulatory/DFS channel checks are unchanged. DBS capable radios retain their
-  existing dwell behaviour. This is limited scan-contention mitigation, not a
-  claim that firmware airtime allocation or the reported call stalls are fixed.
 - Pass display->drm_conn to the dimlayer sysfs backlight callback instead of
   evaluating an uninitialized local connector pointer. The current backlight
   implementation does not dereference that argument; this removes undefined
@@ -52,21 +44,9 @@ Host regressions compile the actual decision functions against small API stubs:
 
 ```
 python3 tools/testing/selftests/cpufreq/sugov-regression.py
-python3 tools/testing/selftests/net/wlan-coex-regression.py
 ```
 
-These do not test scheduler concurrency, RF behaviour or device boot. During
-read-only inspection, the connected moonstone reported schedutil, an active
-2437 MHz hotspot, regulatory country BY and available 5 GHz AP channels 36-140.
-No channel, radio mode, codec, volume, thermal limit or cellular setting was
-changed by the inspection. A separate user-authorized silent playback test may
-exercise A2DP without reproducing actual music or HFP voice traffic.
-
-5 GHz support is already present; forcing channels or antenna/coexistence modes
-without board/firmware evidence is inappropriate. Compare a 5 GHz-only AP on
-legal non-DFS channels when the user can interrupt tethering. For ordinary
-cellular calls, capture RAT/data/IMS state during the failure before attributing
-the upstream outage to WLAN; the idle snapshot cannot establish VoLTE behaviour.
+These do not test scheduler concurrency or device boot.
 
 ## Linux 6.x status
 

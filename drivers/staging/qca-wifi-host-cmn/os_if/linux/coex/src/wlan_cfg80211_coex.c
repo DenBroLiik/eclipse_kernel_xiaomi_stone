@@ -67,6 +67,12 @@ __wlan_cfg80211_coex_set_btc_chain_mode(struct wlan_objmgr_vdev *vdev,
 	if (cur_mode == mode)
 		return -EALREADY;
 
+	status = ucfg_coex_psoc_set_btc_chain_mode(psoc, mode);
+	if (!QDF_IS_STATUS_SUCCESS(status)) {
+		coex_err("unable to set BTC chain mode to %d", mode);
+		return -EFAULT;
+	}
+
 	wlan_objmgr_for_each_psoc_vdev(psoc, vdev_id, vdev_tmp) {
 		status = ucfg_coex_send_btc_chain_mode(vdev_tmp, mode);
 		err = qdf_status_to_os_return(status);
@@ -77,22 +83,12 @@ __wlan_cfg80211_coex_set_btc_chain_mode(struct wlan_objmgr_vdev *vdev,
 		}
 		coex_debug("Set btc chain mode to %d for vdev %d",
 			   mode, vdev_id);
-	}
 
-	/* Failed firmware commands must not poison the cached mode and prevent
-	 * retrying with -EALREADY. Restart interfaces only after all sends succeed.
-	 */
-	status = ucfg_coex_psoc_set_btc_chain_mode(psoc, mode);
-	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		coex_err("unable to set BTC chain mode to %d", mode);
-		return -EFAULT;
-	}
+		if (!do_restart)
+			continue;
 
-	if (!do_restart)
-		return 0;
-
-	wlan_objmgr_for_each_psoc_vdev(psoc, vdev_id, vdev_tmp)
 		wlan_coex_config_updated(vdev_tmp, COEX_CONFIG_BTC_CHAIN_MODE);
+	}
 
 	return 0;
 }

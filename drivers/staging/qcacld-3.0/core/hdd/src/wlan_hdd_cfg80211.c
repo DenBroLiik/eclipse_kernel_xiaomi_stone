@@ -15195,9 +15195,7 @@ void hdd_bt_activity_cb(hdd_handle_t hdd_handle, uint32_t bt_activity)
 	else
 		return;
 
-	/* Voice must retain scan protection when A2DP stops for a call. */
-	ucfg_scan_set_bt_activity(hdd_ctx->psoc,
-				  hdd_ctx->bt_a2dp_active || hdd_ctx->bt_vo_active);
+	ucfg_scan_set_bt_activity(hdd_ctx->psoc, hdd_ctx->bt_a2dp_active);
 	hdd_debug("a2dp_active: %d vo_active: %d", hdd_ctx->bt_a2dp_active,
 		 hdd_ctx->bt_vo_active);
 }

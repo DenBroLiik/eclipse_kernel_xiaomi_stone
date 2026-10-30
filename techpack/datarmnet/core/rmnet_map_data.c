@@ -1329,36 +1329,30 @@ static void rmnet_free_agg_pages(struct rmnet_port *port)
 
 static struct page *rmnet_get_agg_pages(struct rmnet_port *port)
 {
-	struct rmnet_agg_page *agg_page, *first;
+	struct rmnet_agg_page *agg_page;
 	struct page *page = NULL;
 	int i = 0;
 
 	if (!(port->egress_agg_params.agg_features & RMNET_PAGE_RECYCLE))
 		goto alloc;
 
-	first = port->agg_head;
 	do {
 		agg_page = port->agg_head;
 		if (unlikely(!agg_page))
 			break;
-
-		/* The list head is a sentinel, not a recyclable page. */
-		if (list_is_last(&agg_page->list, &port->agg_list))
-			port->agg_head = list_first_entry(&port->agg_list,
-							 struct rmnet_agg_page, list);
-		else
-			port->agg_head = list_next_entry(agg_page, list);
 
 		if (page_ref_count(agg_page->page) == 1) {
 			page = agg_page->page;
 			page_ref_inc(agg_page->page);
 
 			port->stats.agg.ul_agg_reuse++;
+			port->agg_head = list_next_entry(agg_page, list);
 			break;
 		}
 
+		port->agg_head = list_next_entry(agg_page, list);
 		i++;
-	} while (i < 6 && port->agg_head != first);
+	} while (i <= 5);
 
 alloc:
 	if (!page) {
@@ -1444,11 +1438,8 @@ static void rmnet_map_send_agg_skb(struct rmnet_port *port, unsigned long flags)
 	port->agg_count = 0;
 	memset(&port->agg_time, 0, sizeof(port->agg_time));
 	port->agg_state = 0;
-	/* Serialize cancellation with the next aggregate's timer start.
-	 * The timer callback only queues work; it never takes agg_lock.
-	 */
-	hrtimer_cancel(&port->hrtimer);
 	spin_unlock_irqrestore(&port->agg_lock, flags);
+	hrtimer_cancel(&port->hrtimer);
 	dev_queue_xmit(agg_skb);
 }
 
@@ -1461,7 +1452,7 @@ void rmnet_map_tx_aggregate(struct sk_buff *skb, struct rmnet_port *port)
 new_packet:
 	spin_lock_irqsave(&port->agg_lock, flags);
 	memcpy(&last, &port->agg_last, sizeof(last));
-	ktime_get_ts64(&port->agg_last);
+	ktime_get_real_ts64(&port->agg_last);
 
 	if ((port->data_format & RMNET_EGRESS_FORMAT_PRIORITY) &&
 	    skb->priority) {
@@ -1503,7 +1494,7 @@ new_packet:
 		port->agg_skb->dev = skb->dev;
 		port->agg_skb->protocol = htons(ETH_P_MAP);
 		port->agg_count = 1;
-		ktime_get_ts64(&port->agg_time);
+		ktime_get_real_ts64(&port->agg_time);
 		dev_kfree_skb_any(skb);
 		goto schedule;
 	}
@@ -1606,13 +1597,25 @@ void rmnet_map_tx_aggregate_exit(struct rmnet_port *port)
 void rmnet_map_tx_qmap_cmd(struct sk_buff *qmap_skb)
 {
 	struct rmnet_port *port;
+	struct sk_buff *agg_skb;
 	unsigned long flags;
 
 	port = rmnet_get_port(qmap_skb->dev);
 
 	if (port && (port->data_format & RMNET_EGRESS_FORMAT_AGGREGATION)) {
 		spin_lock_irqsave(&port->agg_lock, flags);
-		rmnet_map_send_agg_skb(port, flags);
+		if (port->agg_skb) {
+			agg_skb = port->agg_skb;
+			port->agg_skb = 0;
+			port->agg_count = 0;
+			memset(&port->agg_time, 0, sizeof(port->agg_time));
+			port->agg_state = 0;
+			spin_unlock_irqrestore(&port->agg_lock, flags);
+			hrtimer_cancel(&port->hrtimer);
+			dev_queue_xmit(agg_skb);
+		} else {
+			spin_unlock_irqrestore(&port->agg_lock, flags);
+		}
 	}
 
 	dev_queue_xmit(qmap_skb);

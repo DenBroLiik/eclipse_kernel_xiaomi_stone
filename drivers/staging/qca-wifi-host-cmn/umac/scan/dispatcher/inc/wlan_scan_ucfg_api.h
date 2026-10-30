@@ -656,7 +656,7 @@ bool ucfg_copy_ie_whitelist_attrs(struct wlan_objmgr_psoc *psoc,
 /**
  * ucfg_scan_set_bt_activity() - API to set bt activity
  * @psoc: pointer to psoc object
- * @bt_a2dp_active: Bluetooth audio activity (A2DP or voice)
+ * @bt_a2dp_active: bt activiy value
  *
  * Return: None
  */
