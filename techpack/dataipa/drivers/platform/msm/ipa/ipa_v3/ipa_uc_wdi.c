@@ -347,7 +347,7 @@ struct IpaHwEventLogInfoData_t *uc_event_top_mmio)
 
 	if ((uc_event_top_mmio->protocolMask &
 		(1 << IPA_HW_PROTOCOL_WDI)) == 0) {
-		IPAERR("WDI protocol missing 0x%x\n",
+		IPADBG("WDI protocol missing 0x%x\n",
 			uc_event_top_mmio->protocolMask);
 		return;
 	}
